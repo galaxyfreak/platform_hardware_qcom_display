@@ -32,6 +32,12 @@
 
 #define MAX_IGC_LUT_ENTRIES 256
 
+enum ColorSpace_t{
+    ITU_R_601,
+    ITU_R_601_FR,
+    ITU_R_709,
+};
+
 struct HSICData_t {
     int32_t hue;
     float   saturation;
@@ -78,9 +84,12 @@ typedef enum {
     PP_PARAM_SHARP2     = 0x0020,
     PP_PARAM_TIMESTAMP  = 0x0040,
     UPDATE_BUFFER_GEOMETRY = 0x0080,
+    UPDATE_COLOR_SPACE = 0x0200,
 } DispParamType;
 
-int setMetaData(private_handle_t *handle, DispParamType paramType, void *param);
+struct private_handle_t;
+int setMetaData(struct private_handle_t *handle, enum DispParamType paramType,
+        void *param);
 
 #endif /* _QDMETADATA_H */
 
