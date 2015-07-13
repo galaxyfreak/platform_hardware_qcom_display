@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012-2013, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2012-2014, The Linux Foundation. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are
@@ -29,6 +29,10 @@
 
 #ifndef _QDMETADATA_H
 #define _QDMETADATA_H
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 #define MAX_IGC_LUT_ENTRIES 256
 
@@ -66,16 +70,17 @@ struct BufferDim_t {
 struct MetaData_t {
     int32_t operation;
     int32_t interlaced;
-    BufferDim_t bufferDim;
-    HSICData_t hsicData;
+    struct BufferDim_t bufferDim;
+    struct HSICData_t hsicData;
     int32_t sharpness;
     int32_t video_interface;
-    IGCData_t igcData;
-    Sharp2Data_t Sharp2Data;
+    struct IGCData_t igcData;
+    struct Sharp2Data_t Sharp2Data;
     int64_t timestamp;
+    enum ColorSpace_t colorSpace;
 };
 
-typedef enum {
+enum DispParamType {
     PP_PARAM_HSIC       = 0x0001,
     PP_PARAM_SHARPNESS  = 0x0002,
     PP_PARAM_INTERLACED = 0x0004,
@@ -85,11 +90,15 @@ typedef enum {
     PP_PARAM_TIMESTAMP  = 0x0040,
     UPDATE_BUFFER_GEOMETRY = 0x0080,
     UPDATE_COLOR_SPACE = 0x0200,
-} DispParamType;
+};
 
 struct private_handle_t;
 int setMetaData(struct private_handle_t *handle, enum DispParamType paramType,
         void *param);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* _QDMETADATA_H */
 

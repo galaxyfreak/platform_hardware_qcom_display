@@ -31,6 +31,7 @@
 #define OVERLAY_H
 
 #include "overlayUtils.h"
+#include "mdp_version.h"
 #include "utils/threads.h"
 
 struct MetaData_t;
@@ -49,6 +50,18 @@ public:
     enum { MIXER_LEFT, MIXER_RIGHT, MIXER_UNUSED };
     enum { MIXER_DEFAULT = MIXER_LEFT, MIXER_MAX = MIXER_UNUSED };
     enum { MAX_FB_DEVICES = DPY_MAX };
+    enum { FORMAT_YUV, FORMAT_RGB };
+
+    struct PipeSpecs {
+        PipeSpecs() : formatClass(FORMAT_RGB), needsScaling(false), fb(false),
+                dpy(DPY_PRIMARY), mixer(MIXER_DEFAULT), numActiveDisplays(1) {}
+        int formatClass;
+        bool needsScaling;
+        bool fb;
+        int dpy;
+        int mixer;
+        int numActiveDisplays;
+    };
 
     /* dtor close */
     ~Overlay();
@@ -65,37 +78,65 @@ public:
      */
     void configDone();
 
-    /* Returns an available pipe based on the type of pipe requested. When ANY
-     * is requested, the first available VG or RGB is returned. If no pipe is
-     * available for the display "dpy" then INV is returned. Note: If a pipe is
-     * assigned to a certain display, then it cannot be assigned to another
-     * display without being garbage-collected once. To add if a pipe is
-     * asisgned to a mixer within a display it cannot be reused for another
-     * mixer without being UNSET once*/
-    utils::eDest nextPipe(utils::eMdpPipeType, int dpy, int mixer);
+    /* Get a pipe that supported the specified format class (yuv, rgb) and has
+     * scaling capabilities.
+     */
+    utils::eDest getPipe(const PipeSpecs& pipeSpecs);
+    /* Returns the eDest corresponding to an already allocated pipeid.
+     * Useful for the reservation case, when libvpu reserves the pipe at its
+     * end, and expect the overlay to allocate a given pipe for a layer.
+     */
+    utils::eDest reservePipe(int pipeid);
+    /* getting dest for the given pipeid */
+    utils::eDest getDest(int pipeid);
+    /* getting overlay.pipeid for the given dest */
+    int getPipeId(utils::eDest dest);
 
     void setSource(const utils::PipeArgs args, utils::eDest dest);
     void setCrop(const utils::Dim& d, utils::eDest dest);
+    void setColor(const uint32_t color, utils::eDest dest);
     void setTransform(const int orientation, utils::eDest dest);
     void setPosition(const utils::Dim& dim, utils::eDest dest);
     void setVisualParams(const MetaData_t& data, utils::eDest dest);
     bool commit(utils::eDest dest);
     bool queueBuffer(int fd, uint32_t offset, utils::eDest dest);
 
+    /* pipe reservation session is running */
+    bool sessionInProgress(utils::eDest dest);
+    /* pipe reservation session has ended*/
+    bool isSessionEnded(utils::eDest dest);
+    /* start session for the pipe reservation */
+    void startSession(utils::eDest dest);
+    /* end all started sesisons */
+    void endAllSessions();
     /* Returns available ("unallocated") pipes for a display's mixer */
     int availablePipes(int dpy, int mixer);
+    /* Returns available ("unallocated") pipes for a display */
+    int availablePipes(int dpy);
+    /* Returns available ("unallocated") pipe of given type for a display */
+    int availablePipes(int dpy, utils::eMdpPipeType type);
     /* Returns if any of the requested pipe type is attached to any of the
      * displays
      */
     bool isPipeTypeAttached(utils::eMdpPipeType type);
+    /* Compare pipe priorities and return
+     * 1 if 1st pipe has a higher priority
+     * 0 if both have the same priority
+     *-1 if 2nd pipe has a higher priority
+     */
+    int comparePipePriority(utils::eDest pipe1Index, utils::eDest pipe2Index);
     /* Returns pipe dump. Expects a NULL terminated buffer of big enough size
      * to populate.
      */
+    /* Returns if DMA pipe multiplexing is supported by the mdss driver */
+    static bool isDMAMultiplexingSupported();
+    /* Returns if UI scaling on external is supported on the targets */
+    static bool isUIScalingOnExternalSupported();
     void getDump(char *buf, size_t len);
     /* Reset usage and allocation bits on all pipes for given display */
     void clear(int dpy);
-    /* Marks the display, whose pipes need to be forcibaly configured */
-    void forceSet(const int& dpy);
+    /* Validate the set of pipes for a display and set them in driver */
+    bool validateAndSet(const int& dpy, const int& fbFd);
 
     /* Closes open pipes, called during startup */
     static int initOverlay();
@@ -105,14 +146,39 @@ public:
     static int getDMAMode();
     /* Returns the framebuffer node backing up the display */
     static int getFbForDpy(const int& dpy);
+
     static bool displayCommit(const int& fd);
+    /* Overloads display commit with ROI's of each halves.
+     * Single interface panels will only update left ROI. */
+    static bool displayCommit(const int& fd, const utils::Dim& lRoi,
+                              const utils::Dim& rRoi);
 
 private:
     /* Ctor setup */
     explicit Overlay();
     /*Validate index range, abort if invalid */
     void validate(int index);
+    static void setDMAMultiplexingSupported();
     void dump() const;
+    /* Returns an available pipe based on the type of pipe requested. When ANY
+     * is requested, the first available VG or RGB is returned. If no pipe is
+     * available for the display "dpy" then INV is returned. Note: If a pipe is
+     * assigned to a certain display, then it cannot be assigned to another
+     * display without being garbage-collected once. To add if a pipe is
+     * asisgned to a mixer within a display it cannot be reused for another
+     * mixer without being UNSET once*/
+    utils::eDest nextPipe(utils::eMdpPipeType, int dpy, int mixer);
+    /* Helpers that enfore target specific policies while returning pipes */
+    utils::eDest getPipe_8x26(const PipeSpecs& pipeSpecs);
+    utils::eDest getPipe_8x16(const PipeSpecs& pipeSpecs);
+    utils::eDest getPipe_8x39(const PipeSpecs& pipeSpecs);
+
+    /* Returns the handle to libscale.so's programScale function */
+    static int (*getFnProgramScale())(struct mdp_overlay_list *);
+    /* Creates a scalar object using libscale.so */
+    static void initScalar();
+    /* Destroys the scalar object using libscale.so */
+    static void destroyScalar();
 
     /* Just like a Facebook for pipes, but much less profile info */
     struct PipeBook {
@@ -146,7 +212,13 @@ private:
 
         static int NUM_PIPES;
         static utils::eMdpPipeType pipeTypeLUT[utils::OV_MAX];
-
+        /* Session for reserved pipes */
+        enum Session {
+            NONE,
+            START,
+            END
+        };
+        Session mSession;
 
     private:
         //usage tracks if a successful commit happened. So a pipe could be
@@ -171,7 +243,11 @@ private:
     static Overlay *sInstance;
     static int sDpyFbMap[DPY_MAX];
     static int sDMAMode;
-    static int sForceSetBitmap;
+    static bool sDMAMultiplexingSupported;
+    static void *sLibScaleHandle;
+    static int (*sFnProgramScale)(struct mdp_overlay_list *);
+
+    friend class MdpCtrl;
 };
 
 inline void Overlay::validate(int index) {
@@ -198,9 +274,56 @@ inline int Overlay::availablePipes(int dpy, int mixer) {
     return avail;
 }
 
+inline int Overlay::availablePipes(int dpy) {
+    int avail = 0;
+    for(int i = 0; i < PipeBook::NUM_PIPES; i++) {
+        if( (mPipeBook[i].mDisplay == DPY_UNUSED ||
+             mPipeBook[i].mDisplay == dpy) &&
+            PipeBook::isNotAllocated(i) &&
+            !(Overlay::getDMAMode() == Overlay::DMA_BLOCK_MODE &&
+              PipeBook::getPipeType((utils::eDest)i) ==
+              utils::OV_MDP_PIPE_DMA)) {
+            avail++;
+        }
+    }
+    return avail;
+}
+
+inline int Overlay::availablePipes(int dpy, utils::eMdpPipeType type) {
+    int avail = 0;
+    for(int i = 0; i < PipeBook::NUM_PIPES; i++) {
+        if((mPipeBook[i].mDisplay == DPY_UNUSED ||
+            mPipeBook[i].mDisplay == dpy) &&
+            PipeBook::isNotAllocated(i) &&
+            type == PipeBook::getPipeType((utils::eDest)i)) {
+            avail++;
+        }
+    }
+    return avail;
+}
+
 inline void Overlay::setDMAMode(const int& mode) {
     if(mode == DMA_LINE_MODE || mode == DMA_BLOCK_MODE)
         sDMAMode = mode;
+}
+
+inline void Overlay::setDMAMultiplexingSupported() {
+    sDMAMultiplexingSupported = false;
+    if(qdutils::MDPVersion::getInstance().is8x26())
+        sDMAMultiplexingSupported = true;
+}
+
+inline bool Overlay::isDMAMultiplexingSupported() {
+    return sDMAMultiplexingSupported;
+}
+
+inline bool Overlay::isUIScalingOnExternalSupported() {
+    if(qdutils::MDPVersion::getInstance().is8x26() or
+       qdutils::MDPVersion::getInstance().is8x16() or
+       qdutils::MDPVersion::getInstance().is8x39()) {
+        return false;
+    }
+    return true;
 }
 
 inline int Overlay::getDMAMode() {
@@ -212,8 +335,8 @@ inline int Overlay::getFbForDpy(const int& dpy) {
     return sDpyFbMap[dpy];
 }
 
-inline void Overlay::forceSet(const int& dpy) {
-    sForceSetBitmap |= (1 << dpy);
+inline int (*Overlay::getFnProgramScale())(struct mdp_overlay_list *) {
+    return sFnProgramScale;
 }
 
 inline bool Overlay::PipeBook::valid() {
@@ -262,6 +385,18 @@ inline bool Overlay::PipeBook::isNotAllocated(int index) {
 
 inline utils::eMdpPipeType Overlay::PipeBook::getPipeType(utils::eDest dest) {
     return pipeTypeLUT[(int)dest];
+}
+
+inline void Overlay::startSession(utils::eDest dest) {
+    mPipeBook[(int)dest].mSession = PipeBook::START;
+}
+
+inline bool Overlay::sessionInProgress(utils::eDest dest) {
+    return (mPipeBook[(int)dest].mSession == PipeBook::START);
+}
+
+inline bool Overlay::isSessionEnded(utils::eDest dest) {
+    return (mPipeBook[(int)dest].mSession == PipeBook::END);
 }
 
 inline const char* Overlay::PipeBook::getDestStr(utils::eDest dest) {
