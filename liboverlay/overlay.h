@@ -188,8 +188,6 @@ private:
     static void initScalar();
     /* Destroys the scalar object using libscale.so */
     static void destroyScalar();
-    /* Sets the pipe type RGB/VG/DMA*/
-    void setPipeType(utils::eDest pipeIndex, const utils::eMdpPipeType pType);
 
     /* Dynamically link ABL library */
     static void initPostProc();
